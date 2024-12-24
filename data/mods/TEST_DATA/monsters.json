@@ -342,7 +342,7 @@
         "armor_mult": { "bullet": 0.5, "cut": 0.5, "stab": 0.25, "bash": 0.25 },
         "coverage": 25
       },
-      { "id": "test_head", "name": "inline head", "armor_mult": { "physical": 0 }, "coverage": 25 }
+      { "id": "test_head", "name": "inline head", "is_head": true, "armor_mult": { "physical": 0 }, "coverage": 25 }
     ],
     "weakpoint_sets": [ "test_humanoid", "test_special_head" ],
     "vision_day": 30,
@@ -396,7 +396,7 @@
     "id": "mon_test_weakpoint_mon",
     "type": "MONSTER",
     "copy-from": "mon_test_zombie_cop",
-    "weakpoints": [ { "id": "test_eye", "name": "inline eye (zero coverage)", "coverage": 0 } ],
+    "weakpoints": [ { "id": "test_eye", "name": "inline eye (zero coverage)", "is_head": true, "coverage": 0 } ],
     "delete": { "weakpoints": [ { "id": "test_head" } ], "weakpoint_sets": [ "test_special_head" ] }
   },
   {

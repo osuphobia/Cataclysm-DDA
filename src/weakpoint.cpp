@@ -417,6 +417,9 @@ void weakpoint::load( const JsonObject &jo )
     if( jo.has_bool( "is_good" ) ) {
         assign( jo, "is_good", is_good );
     }
+    if( jo.has_bool( "is_head" ) ) {
+        assign( jo, "is_head", is_head );
+    }
     if( jo.has_object( "armor_mult" ) ) {
         armor_mult = load_damage_map( jo.get_object( "armor_mult" ) );
     }
@@ -506,9 +509,13 @@ void weakpoint::apply_to( damage_instance &damage, bool is_crit ) const
         if( is_crit ) {
             if( crit_mult.count( elem.type ) > 0 ) {
                 elem.damage_multiplier *= crit_mult.at( elem.type );
+                add_msg_debug( debugmode::DF_MONSTER, "%s crit_mult %f",
+                               elem.type.str(), crit_mult.at( elem.type ) );
             }
         } else if( damage_mult.count( elem.type ) > 0 ) {
             elem.damage_multiplier *= damage_mult.at( elem.type );
+            add_msg_debug( debugmode::DF_MONSTER, "%s damage_mult %f",
+                           elem.type.str(), damage_mult.at( elem.type ) );
         }
     }
 }
@@ -533,12 +540,16 @@ float weakpoint::hit_chance( const weakpoint_attack &attack ) const
         }
     }
 
+    // If it's a ranged attack, apply it's accuracy.
+    float accuracy = attack.accuracy < 0.0 ? 1.0f : ( 1.0f - attack.accuracy ) * 2.0f;
+    float wp_skill = attack.wp_skill * accuracy;
     // Retrieve multipliers.
     float constant_mult = coverage_mult.of( attack );
     // Probability of a sample from a normal distribution centered on `skill` with `SD = 2`
-    // exceeding the difficulty.
-    float diff = attack.wp_skill - difficulty.of( attack );
-    float difficulty_mult = 0.5f * ( 1.0f + erf( diff / ( 2.0f * sqrt( 2.0f ) ) ) );
+    // exceeding the difficulty, and erfc if it does not benefit the attacker.
+    float diff = wp_skill - difficulty.of( attack );
+    diff = erf( diff / ( 2.0f * sqrt( 2.0f ) ) );
+    float difficulty_mult = is_good ? 0.5f * ( 1.0f + diff ) : 0.5f * ( 1.0f - diff );
     float final_coverage;
 
     if( attack.source && attack.source->as_character() && is_good ) {
@@ -568,10 +579,10 @@ static float reweigh( float base, float rolls )
 const weakpoint *weakpoints::select_weakpoint( const weakpoint_attack &attack ) const
 {
     add_msg_debug( debugmode::DF_MONSTER,
-                   "Weakpoint Selection: Source: %s, Weapon %s, Skill %.3f",
+                   "Weakpoint Selection: Source: %s, Weapon %s, Skill %.3f, Accuracy %.3f",
                    attack.source == nullptr ? "nullptr" : attack.source->get_name(),
                    attack.weapon == nullptr ? "nullptr" : attack.weapon->type_name(),
-                   attack.wp_skill );
+                   attack.wp_skill, attack.accuracy );
     float rolls = std::max( 1.0f, 1.0f + attack.wp_skill / 2.5f );
     // The base probability of hitting a more preferable weak point.
     float base = 0.0f;
