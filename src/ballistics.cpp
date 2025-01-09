@@ -51,6 +51,7 @@ static const ammo_effect_str_id ammo_effect_NO_OVERSHOOT( "NO_OVERSHOOT" );
 static const ammo_effect_str_id ammo_effect_NO_PENETRATE_OBSTACLES( "NO_PENETRATE_OBSTACLES" );
 static const ammo_effect_str_id ammo_effect_NULL_SOURCE( "NULL_SOURCE" );
 static const ammo_effect_str_id ammo_effect_SHATTER_SELF( "SHATTER_SELF" );
+static const ammo_effect_str_id ammo_effect_SHOT( "SHOT" );
 static const ammo_effect_str_id ammo_effect_STREAM( "STREAM" );
 static const ammo_effect_str_id ammo_effect_STREAM_BIG( "STREAM_BIG" );
 static const ammo_effect_str_id ammo_effect_STREAM_TINY( "STREAM_TINY" );
@@ -117,7 +118,7 @@ static void drop_or_embed_projectile( const dealt_projectile_attack &attack )
     // Copy the item
     item dropped_item = drop_item;
 
-    monster *mon = dynamic_cast<monster *>( attack.hit_critter );
+    monster *mon = dynamic_cast<monster *>( attack.last_hit_critter );
 
     // We can only embed in monsters
     bool mon_there = mon != nullptr && !mon->is_dead_state();
@@ -223,9 +224,9 @@ projectile_attack_aim projectile_attack_roll( const dispersion_sources &dispersi
 dealt_projectile_attack projectile_attack( const projectile &proj_arg,
         const tripoint_bub_ms &source, const tripoint_bub_ms &target_arg,
         const dispersion_sources &dispersion, Creature *origin, const vehicle *in_veh,
-        const weakpoint_attack &wp_attack, bool first )
+        const weakpoint_attack &wp_attack )
 {
-    const bool do_animation = first && get_option<bool>( "ANIMATION_PROJECTILES" );
+    const bool do_animation = get_option<bool>( "ANIMATION_PROJECTILES" );
 
     double range = rl_dist( source, target_arg );
 
@@ -322,10 +323,8 @@ dealt_projectile_attack projectile_attack( const projectile &proj_arg,
         range = rl_dist( source, target );
         extend_to_range = range;
 
-        if( first ) {
-            sfx::play_variant_sound( "bullet_hit", "hit_wall", sfx::get_heard_volume( target ),
-                                     sfx::get_heard_angle( target ) );
-        }
+        sfx::play_variant_sound( "bullet_hit", "hit_wall", sfx::get_heard_volume( target ),
+                                 sfx::get_heard_angle( target ) );
         // TODO: Z dispersion
     }
 
@@ -361,6 +360,11 @@ dealt_projectile_attack projectile_attack( const projectile &proj_arg,
     size_t traj_len = trajectory.size();
     while( traj_len > 0 && rl_dist( source, trajectory[traj_len - 1] ) > proj_arg.range ) {
         --traj_len;
+    }
+
+    double spread = 0.0;
+    if( proj_effects.count( ammo_effect_SHOT ) && proj.shot_spread > 0 ) {
+        double spread = tan( units::from_arcmin( proj.shot_spread ) ) * range * 0.5;
     }
 
     const float projectile_skip_multiplier = 0.1f;
@@ -431,7 +435,7 @@ dealt_projectile_attack projectile_attack( const projectile &proj_arg,
         }
 
         // Reset hit critter from the last iteration
-        attack.hit_critter = nullptr;
+        attack.last_hit_critter = nullptr;
 
         // If we shot us a monster...
         // TODO: add size effects to accuracy
@@ -460,16 +464,14 @@ dealt_projectile_attack projectile_attack( const projectile &proj_arg,
                 origin->check_avoid_friendly_fire() ) {
                 continue;
             }
-            attack.missed_by = cur_missed_by;
             bool print_messages = true;
             // If the attack is shot, once we're past point-blank,
-            // overwrite the default damage with shot damage.
+            // don't print normal hit msg.
             if( proj.count > 1 && rl_dist( source, tp ) > 1 ) {
-                attack.proj.impact = attack.proj.shot_impact;
                 print_messages = false;
             }
-            critter->deal_projectile_attack( null_source ? nullptr : origin, attack, print_messages,
-                                             wp_attack );
+            critter->deal_projectile_attack( null_source ? nullptr : origin, attack, cur_missed_by,
+                                             print_messages, wp_attack, range, target_size );
 
             if( critter->is_npc() ) {
                 critter->as_npc()->on_attacked( *origin );
@@ -477,44 +479,32 @@ dealt_projectile_attack projectile_attack( const projectile &proj_arg,
 
             // Critter can still dodge the projectile
             // In this case hit_critter won't be set
-            if( attack.hit_critter != nullptr ) {
+            if( attack.last_hit_critter != nullptr ) {
                 const field_type_id blood_type = critter->bloodType();
                 if( blood_type ) {
-                    const size_t bt_len = blood_trail_len( attack.dealt_dam.total_damage() );
+                    const size_t bt_len = blood_trail_len( attack.targets_hit[critter].second );
                     if( bt_len > 0 ) {
                         const tripoint_bub_ms &dest = move_along_line( tp, trajectory, bt_len );
                         here.add_splatter_trail( blood_type, tp, dest );
                     }
                 }
-                sfx::do_projectile_hit( *attack.hit_critter );
-                has_momentum = false;
-                // on-hit effects for inflicted damage types
-                for( const std::pair<const damage_type_id, int> &dt : attack.dealt_dam.dealt_dams ) {
-                    dt.first->onhit_effects( origin, attack.hit_critter );
-                }
-            } else {
-                attack.missed_by = aim.missed_by;
+                sfx::do_projectile_hit( *attack.last_hit_critter );
             }
         } else if( in_veh != nullptr && veh_pointer_or_null( here.veh_at( tp ) ) == in_veh ) {
             // Don't do anything, especially don't call map::shoot as this would damage the vehicle
         } else {
-            if( proj.count > 1 ) {
-                if( rl_dist( source, tp ) > 1 ) {
-                    proj.impact = proj.shot_impact;
-                }
-            }
             here.shoot( tp, proj, !no_item_damage && tp == target );
             has_momentum = proj.impact.total_damage() > 0;
         }
-        if( !has_momentum && proj.count > 1 && rl_dist( source, tp ) <= 1 ) {
-            // Track that we hit an obstacle while wadded up,
-            // to cancel out of applying the other projectiles.
+        if( has_momentum && stream && proj.count == 0 ) {
             proj.count = 1;
         }
 
-        if( ( !has_momentum || !is_bullet ) && here.impassable( tp ) ) {
+        if( ( ( !has_momentum || !is_bullet ) && here.impassable( tp ) ) ||
             // Don't let flamethrowers go through walls
             // TODO: Let them go through bars
+            proj.count == 0 ) {
+            // All shots been absorbed
             traj_len = i;
             break;
         }
@@ -533,8 +523,9 @@ dealt_projectile_attack projectile_attack( const projectile &proj_arg,
 
     drop_or_embed_projectile( attack );
 
-    int dealt_damage = attack.dealt_dam.total_damage();
-    apply_ammo_effects( null_source ? nullptr : origin, tp, proj.proj_effects, dealt_damage );
+    for( auto it : attack.targets_hit ) {
+        apply_ammo_effects( null_source ? nullptr : origin, tp, proj.proj_effects, it.second.second );
+    }
     const explosion_data &expl = proj.get_custom_explosion();
     if( expl.power > 0.0f ) {
         explosion_handler::explosion( null_source ? nullptr : origin, tp,

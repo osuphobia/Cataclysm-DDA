@@ -4774,75 +4774,95 @@ void map::shoot( const tripoint_bub_ms &p, projectile &proj, const bool hit_item
 
     const furn_id &furniture = furn( p );
     const ter_id &terrain = ter( p );
-    bool hit_something = false;
+    std::vector<float> dam_total;
 
-    // shoot through furniture or terrain and see if we hit something
-    if( furniture->shoot ) { // Shoot data is optional, most furniture will never trigger this
-        hit_something |= shoot_furn_ter( furniture.obj() );
-    } else if( terrain->shoot ) { // Shoot data is optional, most terrain will never trigger this
-        hit_something |= shoot_furn_ter( terrain.obj() );
-        // fall back to just bashing when shoot data is not defined
-    } else if( impassable( p ) && !is_transparent( p ) ) {
-        bash( p, dam, false );
-        dam = 0;
-    }
-    dam = std::max( 0.0f, dam );
-
-    for( const ammo_effect &ae : ammo_effects::get_all() ) {
-        if( ammo_effects.count( ae.id ) > 0 ) {
-            if( x_in_y( ae.trail_chance, 100 ) ) {
-                add_field( p, ae.trail_field_type, rng( ae.trail_intensity_min, ae.trail_intensity_max ) );
-            }
+    for( int i = 0; i < proj.count; ++i ) {
+        bool hit_something = false;
+        dam = initial_damage;
+        // shoot through furniture or terrain and see if we hit something
+        if( furniture->shoot ) { // Shoot data is optional, most furniture will never trigger this
+            hit_something = shoot_furn_ter( furniture.obj() );
+        } else if( terrain->shoot ) { // Shoot data is optional, most terrain will never trigger this
+            hit_something = shoot_furn_ter( terrain.obj() );
+            // fall back to just bashing when shoot data is not defined
+        } else if( impassable( p ) && !is_transparent( p ) ) {
+            bash( p, dam, false );
+            dam = 0;
         }
-    }
+        dam = std::max( 0.0f, dam );
 
-    // Check fields?
-    field &fields_there = field_at( p );
-    if( fields_there.field_count() > 0 ) {
-        // Need to make a copy since 'remove_field' modifies the value
-        field fields_copy = fields_there;
-        for( const std::pair<const field_type_id, field_entry> &fd : fields_copy ) {
-            const std::optional<map_fd_bash_info> &bash_info = fd.first->bash_info;
-            if( bash_info && bash_info->str_min > 0 && !fd.first->indestructible ) {
-                if( incendiary ) {
-                    add_field( p, fd_fire, fd.second.get_field_intensity() - 1 );
-                } else if( dam > 5 + fd.second.get_field_intensity() * 5 &&
-                           one_in( 5 - fd.second.get_field_intensity() ) ) {
-                    dam -= rng( 1, 2 + fd.second.get_field_intensity() * 2 );
-                    remove_field( p, fd.first );
+        for( const ammo_effect &ae : ammo_effects::get_all() ) {
+            if( ammo_effects.count( ae.id ) > 0 ) {
+                if( x_in_y( ae.trail_chance, 100 ) ) {
+                    add_field( p, ae.trail_field_type, rng( ae.trail_intensity_min, ae.trail_intensity_max ) );
                 }
             }
         }
+
+        // Check fields?
+        field &fields_there = field_at( p );
+        if( fields_there.field_count() > 0 ) {
+            // Need to make a copy since 'remove_field' modifies the value
+            field fields_copy = fields_there;
+            for( const std::pair<const field_type_id, field_entry> &fd : fields_copy ) {
+                const std::optional<map_fd_bash_info> &bash_info = fd.first->bash_info;
+                if( bash_info && bash_info->str_min > 0 && !fd.first->indestructible ) {
+                    if( incendiary ) {
+                        add_field( p, fd_fire, fd.second.get_field_intensity() - 1 );
+                    } else if( dam > 5 + fd.second.get_field_intensity() * 5 &&
+                               one_in( 5 - fd.second.get_field_intensity() ) ) {
+                        dam -= rng( 1, 2 + fd.second.get_field_intensity() * 2 );
+                        remove_field( p, fd.first );
+                    }
+                }
+            }
+        }
+
+        if( dam != initial_damage ) {
+            dam = std::max( 0.0f, dam );
+            dam_total.push_back( dam );
+        }
+        // for now, shooting furniture or terrain protects any items
+        if( !hit_items || hit_something || dam == 0.0f ) {
+            continue;
+        }
+        // Make sure the message is sensible for the ammo effects. Lasers aren't projectiles.
+        std::string damage_message;
+        if( ammo_effects.count( ammo_effect_LASER ) ) {
+            damage_message = _( "laser beam" );
+        } else if( ammo_effects.count( ammo_effect_LIGHTNING ) ) {
+            damage_message = _( "bolt of electricity" );
+        } else if( ammo_effects.count( ammo_effect_PLASMA ) ) {
+            damage_message = _( "bolt of plasma" );
+        } else {
+            damage_message = _( "flying projectile" );
+        }
+
+        // Now, smash items on that tile.
+        // dam / 3, because bullets aren't all that good at destroying items...
+        smash_items( p, dam / 3, damage_message );
     }
 
-    // Rescale the damage
-    if( dam <= 0 ) {
-        proj.impact.damage_units.clear();
-        return;
-    } else if( dam < initial_damage ) {
-        proj.impact.mult_damage( dam / static_cast<double>( initial_damage ) );
+    if( dam_total.size() > 0 ) {
+        auto it = std::find( dam_total.begin(), dam_total.end(), 0.0f );
+        if( it != dam_total.end() ) {
+            dam_total.erase( it );
+        }
+        dam = std::accumulate( dam_total.begin(), dam_total.end(), 0.0f );
+        if( dam_total.size() > 0 ) {
+            proj.count -= dam_total.size();
+            if( proj.count > 0 ) {
+                float average = dam / dam_total.size();
+                // Rescale the damage
+                if( average < initial_damage ) {
+                    proj.impact.mult_damage( average / static_cast<double>( initial_damage ) );
+                }
+            } else {
+                proj.impact.damage_units.clear();
+                return;
+            }
+        }
     }
-
-    // for now, shooting furniture or terrain protects any items
-    if( !hit_items || hit_something ) {
-        return;
-    }
-
-    // Make sure the message is sensible for the ammo effects. Lasers aren't projectiles.
-    std::string damage_message;
-    if( ammo_effects.count( ammo_effect_LASER ) ) {
-        damage_message = _( "laser beam" );
-    } else if( ammo_effects.count( ammo_effect_LIGHTNING ) ) {
-        damage_message = _( "bolt of electricity" );
-    } else if( ammo_effects.count( ammo_effect_PLASMA ) ) {
-        damage_message = _( "bolt of plasma" );
-    } else {
-        damage_message = _( "flying projectile" );
-    }
-
-    // Now, smash items on that tile.
-    // dam / 3, because bullets aren't all that good at destroying items...
-    smash_items( p, dam / 3, damage_message );
 }
 
 bool map::hit_with_acid( const tripoint_bub_ms &p )

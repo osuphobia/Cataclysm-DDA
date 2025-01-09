@@ -142,7 +142,7 @@ static float get_avg_bullet_dmg( const std::string &clothing_id )
         dude->add_effect( effect_sleep, 1_hours );
         dealt_projectile_attack atk = projectile_attack( proj, badguy_pos, dude_pos, dispersion_sources(),
                                       &*badguy );
-        dude->deal_projectile_attack( &*badguy, atk, false );
+        dude->deal_projectile_attack( &*badguy, atk, atk.missed_by, false );
         if( atk.missed_by < 1.0 ) {
             num_hits++;
         }

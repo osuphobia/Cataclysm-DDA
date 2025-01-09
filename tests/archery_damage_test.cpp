@@ -61,7 +61,9 @@ static void test_projectile_attack( const std::string &target_type, bool killabl
         monster target{ mtype_id( target_type ), tripoint_bub_ms::zero };
         //the missed_by field is modified by deal_projectile_attack() and must be reset
         attack.missed_by = headshot ? accuracy_headshot * 0.75 : accuracy_critical;
-        target.deal_projectile_attack( nullptr, attack, false );
+        // proj will be consumed in a successful hit
+        attack.proj.count = 1;
+        target.deal_projectile_attack( nullptr, attack, attack.missed_by, false );
         CAPTURE( target_type );
         CAPTURE( target.get_hp() );
         CAPTURE( target.get_hp_max() );
@@ -93,6 +95,7 @@ static void test_archery_balance( const std::string &weapon_type, const std::str
     if( !unkillable.empty() ) {
         test_projectile_attack( unkillable, false, attack, weapon_type, headshot );
     }
+    attack.proj.count = 1;
     test_projectile_hitting_wall( "t_wall", false, attack, weapon_type );
     // Use "can't kill anything" as an indication that it can't break a window either.
     if( !killable.empty() ) {

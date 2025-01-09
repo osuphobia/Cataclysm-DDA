@@ -90,6 +90,7 @@ static const ammo_effect_str_id ammo_effect_NOGIB( "NOGIB" );
 static const ammo_effect_str_id ammo_effect_NO_DAMAGE_SCALING( "NO_DAMAGE_SCALING" );
 static const ammo_effect_str_id ammo_effect_PARALYZEPOISON( "PARALYZEPOISON" );
 static const ammo_effect_str_id ammo_effect_ROBOT_DAZZLE( "ROBOT_DAZZLE" );
+static const ammo_effect_str_id ammo_effect_SHOT( "SHOT" );
 static const ammo_effect_str_id ammo_effect_TANGLE( "TANGLE" );
 
 static const anatomy_id anatomy_human_anatomy( "human_anatomy" );
@@ -1293,10 +1294,11 @@ void Creature::print_proj_avoid_msg( Creature *source, viewer &player_view ) con
  * @param print_messages enables message printing by default.
  */
 void Creature::deal_projectile_attack( Creature *source, dealt_projectile_attack &attack,
-                                       bool print_messages, const weakpoint_attack &wp_attack )
+                                       const double &missed_by,
+                                       bool print_messages, const weakpoint_attack &wp_attack,
+                                       const int &range, const double &target_size )
 {
     const bool magic = attack.proj.proj_effects.count( ammo_effect_MAGIC ) > 0;
-    const double missed_by = attack.missed_by;
     if( missed_by >= 1.0 && !magic ) {
         // Total miss
         return;
@@ -1307,7 +1309,8 @@ void Creature::deal_projectile_attack( Creature *source, dealt_projectile_attack
         if( mons && mons->mounted_player ) {
             if( !mons->has_flag( mon_flag_MECH_DEFENSIVE ) &&
                 one_in( std::max( 2, mons->get_size() - mons->mounted_player->get_size() ) ) ) {
-                mons->mounted_player->deal_projectile_attack( source, attack, print_messages, wp_attack );
+                mons->mounted_player->deal_projectile_attack( source, attack, missed_by, print_messages,
+                                                              wp_attack, range, target_size );
                 return;
             }
         }
@@ -1338,52 +1341,103 @@ void Creature::deal_projectile_attack( Creature *source, dealt_projectile_attack
         on_try_dodge(); // There's a dodge roll in accuracy_projectile_attack()
     }
 
+    int hit = 0;
+    double max_spread = range > 1 && attack.proj.shot_spread ?
+                        tan( units::from_arcmin( attack.proj.shot_spread / 2.0 ) ) *
+                        ( range - 1 ) * 0.5 / target_size :
+                        0.0;
+    // Shotgun shell loses 50% of velocity at max effective range
+    double range_mult = 1.0 - 0.5 * static_cast<double>( range - 1 ) / static_cast<double>( attack.proj.range );
+    for( int proj_count = 0 ; proj_count < attack.proj.count; ++proj_count ) {
+        if( max_spread > 0.0 ) {
+            double spread = rng_normal( - max_spread, max_spread );
+            spread = spread < 0.0 ? - spread : spread;
+            goodhit = clamp( goodhit + spread, 0.0, 1.0 );
+            add_msg_debug( debugmode::DF_BALLISTIC, "spread roll / max : %f / %f",
+                           spread, max_spread );
+        }
+        if( goodhit >= 1.0 ) {
+            continue;
+        }
 
-    proj.apply_effects_nodamage( *this, source );
+        proj.apply_effects_nodamage( *this, source );
 
-    // Create a copy that records whether the attack is a crit.
-    weakpoint_attack wp_attack_copy = wp_attack;
-    wp_attack_copy.type = weakpoint_attack::attack_type::PROJECTILE;
-    wp_attack_copy.source = attack.shrapnel ? nullptr : source;
-    wp_attack_copy.target = this;
-    wp_attack_copy.accuracy = goodhit;
-    wp_attack_copy.compute_wp_skill();
+        // Create a copy that records whether the attack is a crit.
+        weakpoint_attack wp_attack_copy = wp_attack;
+        wp_attack_copy.type = weakpoint_attack::attack_type::PROJECTILE;
+        wp_attack_copy.source = attack.shrapnel ? nullptr : source;
+        wp_attack_copy.target = this;
+        wp_attack_copy.accuracy = goodhit;
+        wp_attack_copy.compute_wp_skill();
 
-    projectile_attack_results hit_selection = select_body_part_projectile_attack( proj, goodhit,
-            magic, missed_by, wp_attack_copy );
-    wp_attack_copy.is_crit = hit_selection.is_crit;
+        projectile_attack_results hit_selection = select_body_part_projectile_attack( proj, goodhit,
+                magic, missed_by, wp_attack_copy );
+        wp_attack_copy.is_crit = hit_selection.is_crit;
 
-    // copy it, since we're mutating.
-    damage_instance impact = proj.impact;
-    if( hit_selection.damage_mult > 0.0f && proj_effects.count( ammo_effect_NO_DAMAGE_SCALING ) ) {
-        hit_selection.damage_mult = 1.0f;
-    }
+        // copy it, since we're mutating.
+        damage_instance impact = proj.impact;
+        if( hit_selection.damage_mult > 0.0f && proj_effects.count( ammo_effect_NO_DAMAGE_SCALING ) ) {
+            hit_selection.damage_mult = 1.0f;
+        }
 
-    impact.mult_damage( hit_selection.damage_mult );
+        impact.mult_damage( hit_selection.damage_mult );
+        if( proj_effects.count( ammo_effect_SHOT ) ) {
+            if( max_spread > 0.0 ) {
+                impact.mult_damage( range_mult );
+            } else if( range <= 1 ) {
+                // point-blank shots will hit the same point
+                impact.mult_damage( proj.count );
+                attack.proj.count = 1;
+                attack.proj.multi_projectile = false;
+            }
+        }
 
-    if( proj_effects.count( ammo_effect_NOGIB ) > 0 ) {
-        float dmg_ratio = static_cast<float>( impact.total_damage() ) / get_hp_max( hit_selection.bp_hit );
-        if( dmg_ratio > 1.25f ) {
-            impact.mult_damage( 1.0f / dmg_ratio );
+        if( proj_effects.count( ammo_effect_NOGIB ) > 0 ) {
+            float dmg_ratio = static_cast<float>( impact.total_damage() ) / get_hp_max( hit_selection.bp_hit );
+            if( dmg_ratio > 1.25f ) {
+                impact.mult_damage( 1.0f / dmg_ratio );
+            }
+        }
+
+        dealt_dam = deal_damage( source, hit_selection.bp_hit, impact, wp_attack_copy, *hit_selection.wp );
+        // Force damage instance to match the selected body point
+        dealt_dam.bp_hit = hit_selection.bp_hit;
+        // Retrieve the selected weakpoint from the damage instance.
+        hit_selection.wp_hit = dealt_dam.wp_hit;
+
+        proj.apply_effects_damage( *this, source, dealt_dam, goodhit < accuracy_critical );
+
+        if( print_messages ) {
+            messaging_projectile_attack( source, hit_selection, dealt_dam.total_damage() );
+        }
+
+        attack.headshot |= hit_selection.is_headshot;
+        hit++;
+        attack.targets_hit[this].first++;
+        if( dealt_dam.total_damage() > 0 ) {
+            attack.targets_hit[this].second += dealt_dam.total_damage();
+        }
+        check_dead_state();
+        if( is_dead_state() ) {
+            break;
+        }
+        if( source != nullptr ) {
+            // on-hit effects for inflicted damage types
+            for( const std::pair<const damage_type_id, int> &dt : dealt_dam.dealt_dams ) {
+                dt.first->onhit_effects( source, this );
+            }
         }
     }
 
-    dealt_dam = deal_damage( source, hit_selection.bp_hit, impact, wp_attack_copy, *hit_selection.wp );
-    // Force damage instance to match the selected body point
-    dealt_dam.bp_hit = hit_selection.bp_hit;
-    // Retrieve the selected weakpoint from the damage instance.
-    hit_selection.wp_hit = dealt_dam.wp_hit;
-
-    proj.apply_effects_damage( *this, source, dealt_dam, goodhit < accuracy_critical );
-
-    if( print_messages ) {
-        messaging_projectile_attack( source, hit_selection, dealt_dam.total_damage() );
+    if( hit == 0 ) {
+        if( !print_messages ) {
+            return;
+        }
+        print_proj_avoid_msg( source, player_view );
+        return;
+    } else {
+        attack.proj.count -= hit;
     }
-
-    check_dead_state();
-    attack.hit_critter = this;
-    attack.missed_by = goodhit;
-    attack.headshot = hit_selection.is_headshot;
 }
 
 dealt_damage_instance Creature::deal_damage( Creature *source, bodypart_id bp,
