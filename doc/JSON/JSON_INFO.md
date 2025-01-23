@@ -5458,7 +5458,7 @@ Defines how this terrain will interact with ranged projectiles. Has the followin
 
 ```
     // Base chance to hit the object at all (defaults to 100%)
-    int chance_to_hit = 0;
+    int chance_to_hit = 100;
     // Minimum damage reduction to apply to shot when hit
     int reduce_dmg_min = 0;
     // Maximum damage reduction to apply to shot when hit
@@ -5467,7 +5467,7 @@ Defines how this terrain will interact with ranged projectiles. Has the followin
     int reduce_dmg_min_laser = 0;
     // Maximum damage reduction to apply to laser shots when hit
     int reduce_dmg_max_laser = 0;
-    // Damage required to have a chance to destroy
+    // Damage required to damage the object
     int destroy_dmg_min = 0;
     // Damage required to guarantee destruction
     int destroy_dmg_max = 0;

@@ -359,7 +359,10 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
     }
 
     bool first = true;
+    bool print_messages = true;
     bool multishot = false;
+    double point_blank_rescale = 1.0;
+    std::map<tripoint_bub_ms , float> bash_item;
     tripoint_bub_ms first_p = trajectory[1];
     for( int j = 0; j < proj.count; ++j ) {
         tripoint_bub_ms prev_point = source;
@@ -415,10 +418,15 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
         int projectile_skip_calculation = range * projectile_skip_multiplier;
         int projectile_skip_current_frame = rng( 0, projectile_skip_calculation );
         bool has_momentum = true;
-        bool print_messages = true;
 
         for( size_t i = 1; i < traj_len && ( has_momentum || stream ); ++i ) {
             tp = t_copy[i];
+            int distance = rl_dist( source, tp );
+            // no spread at point-blank
+            if( !first && distance <= 1 ) {
+                prev_point = tp;
+                continue;
+            }
 
             if( tp.z() != prev_point.z() ) {
                 tripoint_bub_ms floor1 = prev_point;
@@ -470,7 +478,6 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
             }
 
             monster *mon = dynamic_cast<monster *>( critter );
-            int distance = rl_dist( source, tp );
             // ignore non-point-blank digging targets (since they are underground)
             if( mon != nullptr && mon->digging() &&
                 distance > 1 ) {
@@ -510,7 +517,7 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
                 }
                 // If the attack is shot, once we're past point-blank,
                 // don't print normal hit msg.
-                if( proj.count > 1 && distance > 1 ) {
+                if( first && proj.count > 1 && distance > 1 ) {
                     multishot = true;
                     attack.proj.multishot = true;
                     print_messages = false;
@@ -543,11 +550,17 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
             } else if( in_veh != nullptr && veh_pointer_or_null( here.veh_at( tp ) ) == in_veh ) {
                 // Don't do anything, especially don't call map::shoot as this would damage the vehicle
             } else {
-                if( proj.count > 1 && distance > 1 ) {
+                if( first && proj.count > 1 && distance > 1 ) {
                     multishot = true;
                     proj.multishot = true;
                 }
-                here.shoot( tp, proj, !no_item_damage && tp == target_c );
+                std::pair<float, double> it = here.shoot( tp, proj, cur_missed_by, !no_item_damage && tp == target_c );
+                if( it.first > 0 ) {
+                    bash_item[tp] += it.second;
+                    point_blank_rescale = it.second;
+                } else {
+                    has_momentum = false;
+                }
                 has_momentum = multishot ?
                                proj.shot_impact.total_damage() > 0 :
                                proj.impact.total_damage() > 0;
@@ -576,6 +589,10 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
 
         if( here.impassable( tp ) ) {
             tp = prev_point;
+        }
+        // bash item, no more than one time per tile so shot will not destroy everything
+        for( auto iter : bash_item ) {
+            here.shoot_item( iter.first, proj_arg, iter.second );
         }
 
         drop_or_embed_projectile( attack, proj );

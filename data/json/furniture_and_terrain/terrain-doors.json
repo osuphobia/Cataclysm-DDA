@@ -2978,6 +2978,7 @@
     "looks_like": "t_door_c",
     "color": "light_cyan",
     "move_cost": 0,
+    "coverage": 95,
     "roof": "t_flat_roof",
     "connect_groups": "WALL",
     "connects_to": "WALL",

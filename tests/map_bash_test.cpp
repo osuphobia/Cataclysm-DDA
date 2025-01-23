@@ -247,8 +247,8 @@ TEST_CASE( "shooting_at_terrain", "[map][bash][ranged]" )
                           shooter.pos_bub() + point::east * 2 );
     }
     // TODO: If we get a feature where damage accumulates a test for it would go here.
-    // These are failing because you can't shoot transparent terrain.
-    /*
+
+    // Terrain without shoot data behaves slightly different
     SECTION( "birdshot vs glass door point blank" ) {
         arm_shooter( shooter, itype_mossberg_590, {}, itype_shot_bird );
         shoot_at_terrain( shooter, "t_door_glass_c", shooter.pos_bub() + point::east, true );
@@ -265,5 +265,15 @@ TEST_CASE( "shooting_at_terrain", "[map][bash][ranged]" )
         arm_shooter( shooter, itype_mossberg_590, {}, itype_shot_bird );
         shoot_at_terrain( shooter, "t_screen_door_c", shooter.pos_bub() + point::east * 2, false );
     }
-    */
+    // If you are not aiming at it, use coverage to determine if it can be hit.
+    SECTION( "birdshot through glass at nothing" ) {
+        arm_shooter( shooter, itype_mossberg_590, {}, itype_shot_bird );
+        shoot_at_terrain( shooter, "t_door_glass_c", shooter.pos_bub() + point::east, true,
+        shooter.pos_bub() + point::east * 2 );
+    }
+    SECTION( "birdshot through screen door at nothing" ) {
+        arm_shooter( shooter, itype_mossberg_590, {}, itype_shot_bird );
+        shoot_at_terrain( shooter, "t_screen_door_c", shooter.pos_bub() + point::east, false,
+        shooter.pos_bub() + point::east * 2 );
+    }
 }

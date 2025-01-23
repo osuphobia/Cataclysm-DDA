@@ -195,6 +195,7 @@
     "symbol": "+",
     "color": "light_cyan",
     "move_cost": 0,
+    "coverage": 95,
     "flags": [ "DOOR", "NOITEM", "BLOCK_WIND", "SUPPORTS_ROOF" ],
     "bash": {
       "str_min": 6,
